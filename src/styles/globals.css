@@ -31,3 +31,15 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
+
+/* Article typography. Scoped so it can't leak into app UI. */
+.prose-rm h2 { @apply mb-2.5 mt-9 text-[22px] font-bold tracking-[-.02em]; }
+.prose-rm p { @apply mb-4 leading-[1.68]; }
+.prose-rm ul { @apply mb-4 ml-5 list-disc; }
+.prose-rm li { @apply mb-2 leading-relaxed; }
+.prose-rm table { @apply mb-5 w-full border-collapse text-[13.5px]; }
+.prose-rm td { @apply border-b border-ink-line py-2.5 pr-3 align-top; }
+.prose-rm td:last-child { @apply pr-0 text-ink-variant; }
+.prose-rm blockquote { @apply mb-5 rounded-2xl bg-surface-1 p-5; }
+.prose-rm blockquote p { @apply mb-0; }
+.prose-rm b { @apply font-bold; }

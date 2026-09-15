@@ -1,4 +1,4 @@
-import type { PlanInput, Goal, Instrument } from './types';
+import type { PlanInput, Goal, Instrument, Archetype } from './types';
 import { goalCostAtTarget, requiredCorpus } from './projection';
 import { sipForTarget } from './instruments';
 
@@ -149,4 +149,93 @@ export function tagFor(inst: Instrument): string {
       : 'long-horizon, tax-free';
     case 'cash': return 'buffer and immediate needs';
   }
+}
+
+/* ─────────────── goal tagging ───────────────
+ *
+ * Which of YOUR goals can this instrument legally and sensibly fund?
+ *
+ * Two independent filters, and both matter:
+ *   1. Eligibility — lock-in age and maturity year. EPF cannot pay for a 2032 house
+ *      no matter how much you want it to. This is a legal fact, not a preference.
+ *   2. Suitability — horizon. Equity is eligible for a 2-year goal but reckless for
+ *      one, because a drawdown the year before you spend cannot be recovered from.
+ *
+ * Retirement is always the fallback: anything that cannot fund a nearer goal still
+ * funds retirement, which is why locked instruments are never wasted.
+ */
+
+export interface GoalTag {
+  goalId: string;
+  goalName: string;
+  emoji: string;
+  /** eligible = allowed by lock-in AND appropriate for the horizon */
+  eligible: boolean;
+  reason?: string;
+}
+
+const EMOJI: Record<string, string> = {
+  car: '🚗', house: '🏠', education: '🎓', business: '💼',
+  wedding: '💍', travel: '✈️', other: '⭐',
+};
+
+/** Archetypes appropriate to each horizon — the suitability half of the test. */
+const SUITABLE: Record<Horizon, Archetype[]> = {
+  near: ['deposit', 'cash'],
+  mid: ['balanced', 'locked_free', 'deposit', 'cash'],
+  far: ['growth', 'locked_deferred', 'locked_free', 'balanced'],
+};
+
+export function tagsFor(
+  inst: Instrument,
+  goals: Goal[],
+  currentAge: number,
+  currentYear = new Date().getFullYear()
+): GoalTag[] {
+  return goals.map((g) => {
+    const years = g.targetAge - currentAge;
+    const horizon = horizonOf(years);
+    const base = {
+      goalId: g.id, goalName: g.name, emoji: EMOJI[g.kind] ?? '⭐',
+    };
+
+    if (inst.lockedUntilAge !== null && g.targetAge < inst.lockedUntilAge) {
+      return { ...base, eligible: false,
+        reason: `locked until ${inst.lockedUntilAge}, this goal is at ${g.targetAge}` };
+    }
+    if (inst.maturityYear !== null && currentYear + years < inst.maturityYear) {
+      return { ...base, eligible: false,
+        reason: `matures ${inst.maturityYear}, this goal is ${currentYear + years}` };
+    }
+    if (!SUITABLE[horizon].includes(inst.archetype)) {
+      return { ...base, eligible: false,
+        reason: horizon === 'near'
+          ? `only ${years} years away — this cannot take a market fall`
+          : `${years} years away — wrong shape for this horizon` };
+    }
+    return { ...base, eligible: true };
+  });
+}
+
+/** Just the goals this instrument is funding, for a compact label. */
+export function fundsLabel(
+  inst: Instrument, goals: Goal[], currentAge: number
+): string {
+  const eligible = tagsFor(inst, goals, currentAge).filter((t) => t.eligible);
+  const names = eligible.map((t) => `${t.emoji} ${t.goalName.split(' ')[0]}`);
+  // Everything ultimately backs retirement; only say so when nothing else applies.
+  return names.length ? [...names, '🌅 Retirement'].join(' · ') : '🌅 Retirement only';
+}
+
+/** The inverse view: which instruments are funding a given goal? */
+export function instrumentsForGoal(
+  goal: Goal,
+  instruments: Record<string, Instrument>,
+  allocation: Record<string, number>,
+  currentAge: number
+): Array<{ key: string; label: string; monthly: number }> {
+  return Object.values(instruments)
+    .filter((inst) => (allocation[inst.key] ?? 0) > 0)
+    .filter((inst) => tagsFor(inst, [goal], currentAge)[0].eligible)
+    .map((inst) => ({ key: inst.key, label: inst.label, monthly: allocation[inst.key] ?? 0 }));
 }

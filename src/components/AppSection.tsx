@@ -5,6 +5,7 @@ import type { PlanInput } from '@/lib/engine/types';
 import type { MonthCell } from '@/lib/loadPlan';
 import { buildPlan, goalCostAtTarget } from '@/lib/engine/projection';
 import { AllocationTable } from './AllocationTable';
+import { MilestoneTracker } from './MilestoneTracker';
 import { LifeChart } from './charts/LifeChart';
 import { GOAL_META } from '@/lib/engine/defaults';
 import { INDIA_2026_27 } from '@/lib/engine/rulepacks/india-2026-27';
@@ -44,36 +45,17 @@ export function AppSection({ section, input: initial, months }: {
             <LifeChart rows={plan.rows} required={plan.corpusRequired} input={input} />
           </section>
           <div className="mb-4"><AllocationTable input={input} onChange={setInput} /></div>
-          <section className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {input.goals.map((g) => {
-              const years = g.targetAge - input.profile.currentAge;
-              const then = goalCostAtTarget(g, input.profile.currentAge);
-              const have = Math.max(0, plan.rows.find((r) => r.age === g.targetAge - 1)?.closingCorpus ?? 0);
-              const funded = Math.min(100, Math.round((have / then) * 100));
-              const tone = funded >= 100 ? 'bg-secondary' : funded >= 65 ? 'bg-warn' : 'bg-danger';
-              return (
-                <article key={g.id} className="m3-card-elevated">
-                  <div className="mb-3 flex items-center gap-3">
-                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-container text-lg">
-                      {GOAL_META[g.kind].emoji}
-                    </span>
-                    <span>
-                      <span className="block text-[15px] font-bold">{g.name}</span>
-                      <span className="block text-[11.5px] text-ink-variant">
-                        age {g.targetAge} · {years} yrs away
-                      </span>
-                    </span>
-                  </div>
-                  <div className="mb-2 h-2 overflow-hidden rounded bg-surface-3">
-                    <div className={`h-full rounded ${tone}`} style={{ width: `${funded}%` }} />
-                  </div>
-                  <p className="flex justify-between text-xs text-ink-variant">
-                    <span>costs <b className="text-ink">{inr(then)}</b> by then</span>
-                    <span className="font-bold">{funded >= 100 ? 'Funded' : `${funded}%`}</span>
-                  </p>
-                </article>
-              );
-            })}
+          <section>
+            <h2 className="mb-1 text-base font-bold">Milestones</h2>
+            <p className="mb-4 text-xs text-ink-variant">
+              Months behind, not percent funded — a percentage means nothing without knowing
+              how long is left.
+            </p>
+            <MilestoneTracker
+              input={input}
+              balances={Object.fromEntries(input.holdings.map((h) => [h.key, h.value]))}
+              monthsElapsed={months.filter((m) => m.confirmed).length}
+            />
           </section>
         </>
       )}

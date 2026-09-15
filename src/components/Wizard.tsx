@@ -5,14 +5,19 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { Goal, PlanInput } from '@/lib/engine/types';
 import { DEFAULT_INPUT, GOAL_META } from '@/lib/engine/defaults';
 import { buildPlan, solveRetirementAge, solveMaxExpense, goalCostAtTarget } from '@/lib/engine/projection';
-import { suggestAllocation } from '@/lib/engine/allocation';
-import { sipForTarget } from '@/lib/engine/instruments';
+import { suggestAllocation, instrumentsForGoal } from '@/lib/engine/allocation';
+import { sipForTarget, fdMaturity } from '@/lib/engine/instruments';
 import { AllocationTable } from './AllocationTable';
+import { MilestoneTracker } from './MilestoneTracker';
 import { LifeChart } from './charts/LifeChart';
 import { inr, rupees, pct } from '@/lib/format';
 
 const STEPS = ['You', 'Money', 'Milestones', 'Lifestyle', 'Assets'] as const;
 const YEAR = new Date().getFullYear();
+
+/** Fixed display order for the assets step. Deriving it from object key order let a
+ *  cell lose its label when holdings were rebuilt on edit. */
+const ASSET_ORDER = ['eq', 'st', 'nps', 'epf', 'ppf', 'gold', 'fd', 'cash'] as const;
 
 /**
  * The free planner. No account, nothing stored, nothing transmitted — the engine
@@ -23,6 +28,7 @@ export function Wizard() {
   const [step, setStep] = useState(0);
   const [done, setDone] = useState(false);
   const [input, setInput] = useState<PlanInput>(DEFAULT_INPUT);
+  const [fdYears, setFdYears] = useState(1);
 
   const plan = useMemo(() => buildPlan(input), [input]);
 
@@ -120,16 +126,48 @@ export function Wizard() {
               <div className="grid gap-3.5 sm:grid-cols-2">
                 {Object.values(input.instruments).map((inst) => (
                   <Field key={inst.key} label={inst.label} prefix="₹"
+                         help={inst.rateKind === 'contractual'
+                           ? `${(inst.rate * 100).toFixed(2).replace(/\.00$/, '')}% — ${inst.source}`
+                           : undefined}
                          value={input.holdings.find((h) => h.key === inst.key)?.value ?? 0}
                          onChange={(v) => setInput((i) => ({
                            ...i,
-                           holdings: [
-                             ...i.holdings.filter((h) => h.key !== inst.key),
-                             { key: inst.key, value: v },
-                           ],
+                           // Replace in place so the order never shuffles between renders.
+                           holdings: i.holdings.some((h) => h.key === inst.key)
+                             ? i.holdings.map((h) => (h.key === inst.key ? { ...h, value: v } : h))
+                             : [...i.holdings, { key: inst.key, value: v }],
                          }))} />
                 ))}
               </div>
+
+              {(input.holdings.find((h) => h.key === 'fd')?.value ?? 0) > 0 && (
+                <section className="mt-2 rounded-2xl bg-surface-1 p-4">
+                  <h2 className="text-sm font-bold">About that fixed deposit</h2>
+                  <p className="mb-3.5 mt-1 text-[12px] leading-relaxed text-ink-variant">
+                    A deposit rate is contractual — a fact, not an assumption. Enter what the bank
+                    actually gave you and the projection uses it. Booking one point lower than assumed
+                    quietly raises your required monthly contribution, and the plan should show that.
+                  </p>
+                  <div className="grid gap-3.5 sm:grid-cols-2">
+                    <Field label="Rate you were given" suffix="%"
+                           value={Number((input.instruments.fd.rate * 100).toFixed(2))}
+                           onChange={(v) => setInput((i) => ({
+                             ...i,
+                             instruments: { ...i.instruments, fd: { ...i.instruments.fd, rate: v / 100 } },
+                           }))} />
+                    <Field label="Tenure" suffix="yrs" value={fdYears}
+                           onChange={setFdYears} />
+                  </div>
+                  <p className="rounded-2xl bg-primary-container px-4 py-3.5 text-[12.5px] leading-relaxed text-primary-on">
+                    Compounded quarterly, {rupees(input.holdings.find((h) => h.key === 'fd')!.value)} at{' '}
+                    {pct(input.instruments.fd.rate)} matures at{' '}
+                    <b>{rupees(fdMaturity(input.holdings.find((h) => h.key === 'fd')!.value,
+                      input.instruments.fd.rate, fdYears, 4))}</b> in {fdYears} year{fdYears > 1 ? 's' : ''}.
+                    At maturity it stops being a holding and the money has to be redeployed — the plan
+                    will ask you where it went rather than assuming you reinvested.
+                  </p>
+                </section>
+              )}
             </Step>
           )}
         </motion.div>
@@ -232,35 +270,17 @@ function Result({ input, onEdit, onChange }: {
         <LifeChart rows={plan.rows} required={plan.corpusRequired} input={input} />
       </section>
 
-      <section className="m3-card-elevated mb-4">
-        <h2 className="text-base font-bold">Milestone by milestone</h2>
-        <p className="mb-4 mt-1 text-xs text-ink-variant">
-          What each costs in the year you want it, and what it demands monthly from today.
+      <section className="mb-4">
+        <h2 className="mb-1 text-base font-bold">Milestone by milestone</h2>
+        <p className="mb-4 text-xs text-ink-variant">
+          What each costs in the year you want it, what is behind it already, and which
+          instruments are allowed to fund it.
         </p>
-        {input.goals.map((g) => {
-          const years = g.targetAge - p.currentAge;
-          const then = goalCostAtTarget(g, p.currentAge);
-          const rate = years < 3 ? input.instruments.fd.rate : years < 7 ? 0.085 : input.instruments.eq.rate;
-          return (
-            <div key={g.id} className="flex items-center gap-3 border-b border-ink-line py-3 last:border-0">
-              <span className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-primary-container text-lg">
-                {GOAL_META[g.kind].emoji}
-              </span>
-              <span className="flex-1">
-                <span className="block text-sm font-semibold">{g.name}</span>
-                <span className="block text-[11.5px] text-ink-variant">
-                  {YEAR + years} · {inr(then)} by then
-                </span>
-              </span>
-              <span className="text-right">
-                <span className="block text-[15px] font-bold tabular-nums">
-                  {rupees(sipForTarget(then, years, rate))}
-                </span>
-                <span className="block text-[11px] text-ink-outline">a month</span>
-              </span>
-            </div>
-          );
-        })}
+        <MilestoneTracker
+          input={input}
+          balances={Object.fromEntries(input.holdings.map((h) => [h.key, h.value]))}
+          monthsElapsed={0}
+        />
       </section>
 
       <div className="rounded-xl3 p-8 text-center text-white"
@@ -289,6 +309,33 @@ function Result({ input, onEdit, onChange }: {
 }
 
 /* ─────────────────────────── pieces ─────────────────────────── */
+
+/**
+ * The inverse of the allocation table: for THIS goal, which instruments are paying
+ * for it. Without this, a user has no way to answer "what is actually funding my car".
+ */
+function FundedBy({ goal, input }: { goal: Goal; input: PlanInput }) {
+  const funding = instrumentsForGoal(goal, input.instruments, input.allocation, input.profile.currentAge);
+  if (!funding.length) {
+    return (
+      <p className="mt-2 rounded-xl bg-warn-container px-3 py-2 text-[11.5px] leading-relaxed text-warn-on">
+        Nothing in your current split can fund this goal. Everything you are contributing is
+        either locked past the date or the wrong shape for the horizon.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-variant">
+      <span className="font-semibold">Funded by</span>
+      {funding.map((f) => (
+        <span key={f.key}
+              className="rounded-full bg-surface-2 px-2 py-0.5 font-semibold text-ink">
+          {f.label} · {rupees(f.monthly)}/mo
+        </span>
+      ))}
+    </p>
+  );
+}
 
 function Stepper({ step, onJump }: { step: number; onJump: (n: number) => void }) {
   return (
@@ -412,7 +459,7 @@ function GoalEditor({ input, setInput }: { input: PlanInput; setInput: (i: PlanI
       <button
         onClick={() => setEditing({
           id: crypto.randomUUID(), kind: 'car', name: 'Car',
-          amountToday: 500_000, targetAge: p.currentAge + 5, inflation: 0.06, flexible: true,
+          amountToday: 500_000, targetAge: p.currentAge + 5, inflation: 0.06, flexible: true, priority: 30,
         })}
         className="w-full rounded-2xl border border-dashed border-ink-outline py-4 text-sm font-bold text-primary transition hover:border-transparent hover:bg-primary-container">
         + Add a milestone
@@ -451,6 +498,25 @@ function GoalDialog({ goal, profile, instruments, onSave, onCancel }: {
             </button>
           ))}
         </div>
+
+        <label className="mb-4 block">
+          <span className="mb-1.5 block text-[11px] font-semibold text-ink-variant">
+            Priority — what gives first if the plan does not fit
+          </span>
+          <span className="flex gap-2">
+            {([['Must have', 10], ['Important', 30], ['Nice to have', 70]] as const).map(([label, rank]) => (
+              <button key={rank} type="button"
+                onClick={() => setDraft({ ...draft, priority: rank })}
+                aria-pressed={(draft.priority ?? 50) === rank}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12.5px] font-semibold transition ${
+                  (draft.priority ?? 50) === rank
+                    ? 'border-transparent bg-secondary-container text-secondary-on'
+                    : 'border-ink-outline text-ink-variant'}`}>
+                {label}
+              </button>
+            ))}
+          </span>
+        </label>
 
         <label className="mb-4 block">
           <span className="mb-1.5 block text-[11px] font-semibold text-ink-variant">What is it?</span>

@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { PlanInput } from '@/lib/engine/types';
 import { blendedReturn } from '@/lib/engine/instruments';
 import { solveRequiredMonthly } from '@/lib/engine/projection';
-import { suggestAllocation, allocationWarnings, tagFor } from '@/lib/engine/allocation';
+import { suggestAllocation, allocationWarnings, tagFor, tagsFor } from '@/lib/engine/allocation';
 import { inr } from '@/lib/format';
 
 /**
@@ -116,7 +116,7 @@ export function AllocationTable({
           <tr className="border-b border-ink-line text-[11px] font-bold text-ink-variant">
             <th className="pb-2.5 text-left">Instrument</th>
             <th className="pb-2.5 text-left">Rate</th>
-            <th className="pb-2.5 text-left">Why here</th>
+            <th className="pb-2.5 text-left">Funds which goals</th>
             <th className="pb-2.5 text-right">Monthly</th>
           </tr>
         </thead>
@@ -153,7 +153,9 @@ export function AllocationTable({
                     {contractual ? 'CONTRACTUAL' : 'ASSUMED'}
                   </span>
                 </td>
-                <td className="max-w-[180px] py-3 text-[11.5px] text-ink-variant">{tagFor(inst)}</td>
+                <td className="max-w-[230px] py-3">
+                  <GoalTags input={input} instrumentKey={key} />
+                </td>
                 <td className="py-3 text-right">
                   <input
                     defaultValue={mine.toLocaleString('en-IN')}
@@ -245,6 +247,47 @@ export function AllocationTable({
         )}
       </AnimatePresence>
     </section>
+  );
+}
+
+/**
+ * Which of the user's actual goals this instrument is funding.
+ *
+ * Eligibility is two independent tests: lock-in (a legal fact) and horizon
+ * suitability (a risk fact). Showing the blocked ones greyed, with the reason on
+ * hover, is more useful than hiding them — "why isn't my EPF paying for the house"
+ * is the question this answers.
+ */
+function GoalTags({ input, instrumentKey }: { input: PlanInput; instrumentKey: string }) {
+  const inst = input.instruments[instrumentKey];
+  if (!inst) return null;
+  const tags = tagsFor(inst, input.goals, input.profile.currentAge);
+  const eligible = tags.filter((t) => t.eligible);
+  const blocked = tags.filter((t) => !t.eligible);
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {eligible.map((t) => (
+        <span key={t.goalId}
+              className="rounded-full bg-secondary-container px-2 py-0.5 text-[10.5px] font-semibold text-secondary-on">
+          {t.emoji} {t.goalName}
+        </span>
+      ))}
+      <span className="rounded-full bg-primary-container px-2 py-0.5 text-[10.5px] font-semibold text-primary-on">
+        🌅 Retirement
+      </span>
+      {blocked.map((t) => (
+        <span key={t.goalId} title={t.reason}
+              className="cursor-help rounded-full bg-surface-2 px-2 py-0.5 text-[10.5px] font-medium text-ink-outline line-through">
+          {t.emoji} {t.goalName}
+        </span>
+      ))}
+      {blocked.length > 0 && (
+        <span className="mt-0.5 block w-full text-[10.5px] leading-snug text-ink-outline">
+          {blocked[0].reason}
+        </span>
+      )}
+    </div>
   );
 }
 

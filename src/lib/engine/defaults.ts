@@ -49,7 +49,7 @@ export const INSTRUMENTS: Record<string, Instrument> = {
   },
   cash: {
     key: 'cash', label: 'Cash & liquid', archetype: 'cash', rateKind: 'contractual',
-    rate: 0.035, source: 'Savings account rate',
+    rate: 0.035, source: 'Savings rate — below inflation, so surplus here costs you',
     lockedUntilAge: null, maturityYear: null, compounding: 4,
   },
 };
@@ -63,9 +63,9 @@ export const DEFAULT_MARKET: MarketAssumptions = {
 };
 
 export const DEFAULT_GOALS: Goal[] = [
-  { id: 'g1', kind: 'car', name: 'Car', amountToday: 1_800_000, targetAge: 35, inflation: 0.06, flexible: true },
-  { id: 'g2', kind: 'house', name: 'House down payment', amountToday: 3_000_000, targetAge: 38, inflation: 0.07, flexible: false },
-  { id: 'g3', kind: 'business', name: 'Start the business', amountToday: 4_000_000, targetAge: 45, inflation: 0.06, flexible: true },
+  { id: 'g1', kind: 'car', name: 'Car', amountToday: 1_800_000, targetAge: 35, inflation: 0.06, flexible: true, priority: 30 },
+  { id: 'g2', kind: 'house', name: 'House down payment', amountToday: 3_000_000, targetAge: 38, inflation: 0.07, flexible: false, priority: 10 },
+  { id: 'g3', kind: 'business', name: 'Start the business', amountToday: 4_000_000, targetAge: 45, inflation: 0.06, flexible: true, priority: 70 },
 ];
 
 export const DEFAULT_INPUT: PlanInput = {

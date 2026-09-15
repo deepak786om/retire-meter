@@ -52,6 +52,17 @@ export interface Goal {
   inflation: number;
   /** Flexible goals can absorb a shock; fixed ones cannot. */
   flexible: boolean;
+  /**
+   * Lower number = higher priority. When a plan is infeasible, "everything is
+   * short" is useless — you need to know what gives first. The shortfall is
+   * reported against the lowest-ranked goals, so the answer is "the car slips to
+   * 2031" rather than "you are short of everything".
+   */
+  priority?: number;
+  /** ISO date the goal was actually paid for. Set on completion. */
+  completedOn?: string;
+  /** What it actually cost, which is rarely what was budgeted. */
+  actualSpent?: number;
 }
 
 export interface Profile {

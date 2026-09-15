@@ -1,3 +1,4 @@
+import { computeGoalProgress, glideTarget, completeGoal, describeWithdrawal } from '../src/lib/engine/goals';
 import { describe, it, expect } from 'vitest';
 import {
   fdMaturity, fdPrematureValue, ppfYear, sipForTarget, sipFutureValue,
@@ -7,7 +8,7 @@ import {
   project, requiredCorpus, solveRequiredMonthly, solveRetirementAge, buildPlan,
   goalCostAtTarget,
 } from '../src/lib/engine/projection';
-import { suggestAllocation, allocationWarnings, horizonOf, canFund } from '../src/lib/engine/allocation';
+import { suggestAllocation, allocationWarnings, horizonOf, canFund, tagsFor, fundsLabel, instrumentsForGoal } from '../src/lib/engine/allocation';
 import { INDIA_2026_27, thresholdAt } from '../src/lib/engine/rulepacks/india-2026-27';
 import { DEFAULT_INPUT, INSTRUMENTS } from '../src/lib/engine/defaults';
 
@@ -233,5 +234,145 @@ describe('rule pack', () => {
     const indexed = thresholdAt(base, 'indexed', 0.06, 26);
     expect(frozen).toBe(base);
     expect(indexed).toBeGreaterThan(frozen * 4);
+  });
+});
+
+describe('goal tagging', () => {
+  const soon: typeof DEFAULT_INPUT = {
+    ...DEFAULT_INPUT,
+    goals: [
+      { id: 'near', kind: 'travel', name: 'Japan trip', amountToday: 600_000,
+        targetAge: 34, inflation: .075, flexible: true },
+      ...DEFAULT_INPUT.goals,
+    ],
+  };
+  const age = DEFAULT_INPUT.profile.currentAge;
+
+  it('EPF funds retirement only — it is locked past every pre-retirement goal', () => {
+    const tags = tagsFor(INSTRUMENTS.epf, soon.goals, age);
+    expect(tags.every((t) => !t.eligible)).toBe(true);
+    expect(fundsLabel(INSTRUMENTS.epf, soon.goals, age)).toBe('🌅 Retirement only');
+  });
+
+  it('equity is blocked from a 2-year goal on suitability, not lock-in', () => {
+    const tag = tagsFor(INSTRUMENTS.eq, soon.goals, age).find((t) => t.goalId === 'near')!;
+    expect(tag.eligible).toBe(false);
+    expect(tag.reason).toContain('cannot take a market fall');
+  });
+
+  it('a deposit is the right shape for that same 2-year goal', () => {
+    const tag = tagsFor(INSTRUMENTS.fd, soon.goals, age).find((t) => t.goalId === 'near')!;
+    expect(tag.eligible).toBe(true);
+  });
+
+  it('PPF is blocked by its maturity year, with the year in the reason', () => {
+    const tag = tagsFor(INSTRUMENTS.ppf, soon.goals, age).find((t) => t.goalId === 'near')!;
+    expect(tag.eligible).toBe(false);
+    expect(tag.reason).toContain('2034');
+  });
+
+  it('answers the inverse question — what is funding this goal', () => {
+    const car = soon.goals.find((g) => g.kind === 'car')!;
+    const funding = instrumentsForGoal(car, INSTRUMENTS, { eq: 25_000, epf: 19_800, fd: 6_000 }, age);
+    const keys = funding.map((f) => f.key);
+    expect(keys).not.toContain('epf');       // locked to 58
+    expect(keys.length).toBeGreaterThan(0);
+  });
+});
+
+describe('goal funding waterfall', () => {
+  const input = {
+    ...DEFAULT_INPUT,
+    goals: [
+      { id: 'car', kind: 'car' as const, name: 'Car', amountToday: 800_000,
+        targetAge: 34, inflation: .06, flexible: true, priority: 30 },
+      { id: 'house', kind: 'house' as const, name: 'House', amountToday: 3_000_000,
+        targetAge: 38, inflation: .07, flexible: false, priority: 10 },
+    ],
+  };
+  const balances = { fd: 900_000, gold: 500_000, eq: 4_000_000, epf: 800_000 };
+
+  it('fills the higher-priority goal first even though it is later', () => {
+    const { goals } = computeGoalProgress(input, balances);
+    const house = goals.find((g) => g.goal.id === 'house')!;
+    const car = goals.find((g) => g.goal.id === 'car')!;
+    // House ranks 10, car ranks 30 — the house eats the eligible money first.
+    expect(house.percentFunded).toBeGreaterThanOrEqual(car.percentFunded);
+  });
+
+  it('never funds a goal from an instrument locked past its date', () => {
+    const { goals } = computeGoalProgress(input, balances);
+    for (const g of goals) {
+      expect(g.fundedBy.map((f) => f.key)).not.toContain('epf');
+    }
+  });
+
+  it('reports being behind in months, not just a percentage', () => {
+    const { goals } = computeGoalProgress(input, { fd: 0, eq: 0 }, 12);
+    const car = goals.find((g) => g.goal.id === 'car')!;
+    expect(car.monthsBehind).toBeGreaterThan(6);
+    expect(car.status).toBe('at_risk');
+    expect(car.catchUpAmount).toBeGreaterThan(0);
+  });
+
+  it('leftover money backs retirement rather than vanishing', () => {
+    const { leftoverForRetirement } = computeGoalProgress(input, balances);
+    expect(leftoverForRetirement).toBeGreaterThan(0);
+  });
+
+  it('warns when a near goal is short and equity is sitting there to be raided', () => {
+    // 2 years out, no protected money, but a large equity balance alongside.
+    // Nothing stops you selling equity on the day — which is the actual risk.
+    const near = { ...input, goals: [{ ...input.goals[0], targetAge: 34, priority: 10 }] };
+    const { goals } = computeGoalProgress(near, { fd: 50_000, eq: 5_000_000 });
+    expect(goals[0].exposureWarning ?? '').toContain('no time to recover');
+  });
+
+  it('stays quiet once that near goal is properly funded from protected money', () => {
+    const near = { ...input, goals: [{ ...input.goals[0], targetAge: 34, priority: 10 }] };
+    const { goals } = computeGoalProgress(near, { fd: 2_000_000, eq: 5_000_000 });
+    expect(goals[0].exposureWarning).toBeUndefined();
+  });
+});
+
+describe('glide path', () => {
+  it('leaves long-dated money alone and fully protects money about to be spent', () => {
+    expect(glideTarget(5)).toBe(0);
+    expect(glideTarget(3)).toBe(0);
+    expect(glideTarget(0.4)).toBe(1);
+  });
+
+  it('de-risks progressively through the final three years', () => {
+    const at30m = glideTarget(30 / 12);
+    const at12m = glideTarget(1);
+    expect(at30m).toBeGreaterThan(0);
+    expect(at12m).toBeGreaterThan(at30m);
+    expect(at12m).toBeLessThan(1);
+  });
+});
+
+describe('completion and withdrawals', () => {
+  it('costs an overspend at retirement rather than shrugging', () => {
+    const { goals } = computeGoalProgress(DEFAULT_INPUT, { eq: 5_000_000 });
+    const out = completeGoal(goals[0], goals[0].targetAmount * 1.2, 0.10, 20);
+    expect(out.variance).toBeGreaterThan(0);
+    expect(out.corpusImpact).toBeGreaterThan(out.variance);
+    expect(out.message).toContain('out of what was going to retirement');
+  });
+
+  it('treats an expected goal spend as neutral', () => {
+    const r = describeWithdrawal('goal_spend', 500_000, INSTRUMENTS.fd, 0.1, 20);
+    expect(r.tone).toBe('neutral');
+  });
+
+  it('flags selling equity hardest, and names the exemption it burns', () => {
+    const r = describeWithdrawal('discretionary', 500_000, INSTRUMENTS.eq, 0.1, 20);
+    expect(r.tone).toBe('bad');
+    expect(r.message).toContain('never carries forward');
+  });
+
+  it('explains deposit re-rating on an early break', () => {
+    const r = describeWithdrawal('unplanned', 200_000, INSTRUMENTS.fd, 0.1, 20);
+    expect(r.message).toContain('re-rates');
   });
 });
